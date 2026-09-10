@@ -25,7 +25,13 @@ struct RuntimeInfo {
 static UNINITIALISED_SERVICE_NAME: &str = "undefined";
 
 #[cfg(feature = "foundations-metrics-backend")]
-static SERVICE_NAME: OnceLock<String> = OnceLock::new();
+struct ServiceIdentity {
+    name: String,
+    version: &'static str,
+}
+
+#[cfg(feature = "foundations-metrics-backend")]
+static SERVICE_IDENTITY: OnceLock<ServiceIdentity> = OnceLock::new();
 
 /// Returns the service name to apply when collecting metrics.
 ///
@@ -34,10 +40,15 @@ static SERVICE_NAME: OnceLock<String> = OnceLock::new();
 /// taking effect.
 #[cfg(feature = "foundations-metrics-backend")]
 pub(super) fn service_name() -> &'static str {
-    SERVICE_NAME
+    SERVICE_IDENTITY
         .get()
-        .map(String::as_str)
+        .map(|identity| identity.name.as_str())
         .unwrap_or(UNINITIALISED_SERVICE_NAME)
+}
+
+#[cfg(feature = "foundations-metrics-backend")]
+pub(super) fn service_version() -> Option<&'static str> {
+    SERVICE_IDENTITY.get().map(|identity| identity.version)
 }
 
 /// Initializes the metric system with a system-wide metric prefix.
@@ -53,7 +64,10 @@ pub(crate) fn init(
     settings: &MetricsSettings,
 ) -> crate::BootstrapResult<()> {
     #[cfg(feature = "foundations-metrics-backend")]
-    validate_service_name_format(settings)?;
+    {
+        validate_service_name_format(settings)?;
+        validate_service_version_label_name(settings)?;
+    }
 
     #[cfg(not(feature = "foundations-metrics-backend"))]
     let first_install = Registries::init(service_info, settings);
@@ -69,8 +83,11 @@ pub(crate) fn init(
             super::report_nonfatal_collect_error(&args);
         });
 
-        SERVICE_NAME
-            .set(service_info.name_in_metrics.clone())
+        SERVICE_IDENTITY
+            .set(ServiceIdentity {
+                name: service_info.name_in_metrics.clone(),
+                version: service_info.version,
+            })
             .is_ok()
     };
 
@@ -101,6 +118,22 @@ fn validate_service_name_format(settings: &MetricsSettings) -> crate::BootstrapR
     {
         anyhow::bail!(
             "metrics.service_name_format label name {label_name:?} cannot be encoded; expected {}",
+            foundations_metrics::NAME_REQUIREMENT,
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "foundations-metrics-backend")]
+pub(super) fn validate_service_version_label_name(
+    settings: &MetricsSettings,
+) -> crate::BootstrapResult<()> {
+    if let Some(label_name) = &settings.service_version_label_name
+        && !foundations_metrics::is_valid_name(label_name)
+    {
+        anyhow::bail!(
+            "metrics.service_version_label_name {label_name:?} cannot be encoded; expected {}",
             foundations_metrics::NAME_REQUIREMENT,
         );
     }
@@ -146,5 +179,16 @@ mod service_name_format_tests {
     #[test]
     fn metric_prefix_format_is_not_subject_to_the_check() {
         assert!(validate(ServiceNameFormat::MetricPrefix).is_ok());
+    }
+
+    #[test]
+    fn unencodable_service_version_label_names_are_rejected() {
+        let error = validate_service_version_label_name(&MetricsSettings {
+            service_version_label_name: Some("ver\0sion".to_owned()),
+            ..Default::default()
+        })
+        .expect_err("an unencodable service version label name must be rejected");
+
+        assert!(error.to_string().contains("service_version_label_name"));
     }
 }

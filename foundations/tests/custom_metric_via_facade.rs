@@ -59,7 +59,7 @@ fn a_custom_metric_is_exposed_through_the_facade() {
 
     let settings = MetricsSettings {
         service_name_format: ServiceNameFormat::MetricPrefix,
-        report_optional: false,
+        ..Default::default()
     };
     let text = collect_text(&settings);
 

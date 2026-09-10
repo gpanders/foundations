@@ -41,7 +41,7 @@ async fn init_reports_build_and_runtime_info_unprefixed() {
 
     let settings = MetricsSettings {
         service_name_format: ServiceNameFormat::MetricPrefix,
-        report_optional: false,
+        ..Default::default()
     };
     let text = collect_text(&settings);
 

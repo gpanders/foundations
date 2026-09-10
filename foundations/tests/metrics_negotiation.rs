@@ -122,7 +122,7 @@ async fn metrics_endpoint_serves_the_negotiated_format() {
 
         let label_settings = MetricsSettings {
             service_name_format: ServiceNameFormat::LabelWithName("service".to_owned()),
-            report_optional: false,
+            ..Default::default()
         };
         let labelled = collect_text(&label_settings);
 

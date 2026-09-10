@@ -52,6 +52,11 @@ telemetry:
     service_name_format: metric_prefix
     # Whether to report optional metrics in the telemetry server.
     report_optional: false
+    # Label name used to add `ServiceInfo::version` to every registered metric.
+    #
+    # A metric row that already uses this name with a different value is not
+    # collected.
+    service_version_label_name: null
   # Server settings.
   server:
     # Enables telemetry server

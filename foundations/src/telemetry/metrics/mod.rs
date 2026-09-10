@@ -112,16 +112,100 @@ fn collection_options(settings: &MetricsSettings) -> foundations_metrics::Collec
 #[cfg(feature = "foundations-metrics-backend")]
 fn collect_registered_metrics(
     settings: &MetricsSettings,
-) -> Vec<foundations_metrics::MetricFamily> {
+) -> Result<Vec<foundations_metrics::MetricFamily>> {
+    init::validate_service_version_label_name(settings)?;
+
     #[cfg(target_os = "linux")]
     process::register();
 
-    foundations_metrics::collect(collection_options(settings))
+    let mut families = foundations_metrics::collect(collection_options(settings));
+    if let Some(name) = settings.service_version_label_name.as_deref() {
+        let version = init::service_version()
+            .ok_or("metrics.service_version_label_name requires telemetry to be initialized")?;
+        apply_service_version_label(&mut families, name, version);
+    }
+    Ok(families)
+}
+
+#[cfg(feature = "foundations-metrics-backend")]
+fn apply_service_version_label(
+    families: &mut [foundations_metrics::MetricFamily],
+    name: &str,
+    value: &str,
+) {
+    let version_label = foundations_metrics::proto::LabelPair {
+        name: Some(name.to_owned()),
+        value: Some(value.to_owned()),
+    };
+
+    for family in families {
+        let family_name = family.name.as_deref().unwrap_or_default();
+        family.metric.retain_mut(|metric| {
+            match metric
+                .label
+                .iter()
+                .find(|label| label.name.as_deref() == Some(name))
+            {
+                Some(label) if label.value.as_deref() != Some(value) => {
+                    report_nonfatal_collect_error(&format_args!(
+                        "skipped row in metric family {family_name:?}; service version label {name:?} already has a different value"
+                    ));
+                    false
+                }
+                Some(_) => true,
+                None => {
+                    metric.label.insert(0, version_label.clone());
+                    true
+                }
+            }
+        });
+    }
+}
+
+#[cfg(all(test, feature = "foundations-metrics-backend"))]
+mod service_version_label_tests {
+    use foundations_metrics::proto::{LabelPair, Metric, MetricFamily};
+
+    use super::apply_service_version_label;
+
+    fn label(name: &str, value: &str) -> LabelPair {
+        LabelPair {
+            name: Some(name.to_owned()),
+            value: Some(value.to_owned()),
+        }
+    }
+
+    #[test]
+    fn version_label_is_idempotent_and_drops_conflicting_rows() {
+        let wanted = label("version", "wanted");
+        let mut families = [MetricFamily {
+            metric: vec![
+                Metric {
+                    label: vec![wanted.clone()],
+                    ..Default::default()
+                },
+                Metric {
+                    label: vec![label("version", "other")],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }];
+
+        apply_service_version_label(&mut families, "version", "wanted");
+
+        assert_eq!(families[0].metric.len(), 1);
+        assert_eq!(families[0].metric[0].label, vec![wanted]);
+    }
 }
 
 /// Collects all metrics in [Prometheus text format].
 ///
 /// [Prometheus text format]: https://prometheus.io/docs/instrumenting/exposition_formats/#text-based-format
+///
+/// # Errors
+///
+/// Fails when the service version label is invalid or telemetry is not initialized.
 #[cfg_attr(
     feature = "foundations-metrics-backend",
     deprecated = "Only ever produces text. Use `collect_format` instead, serving the body it returns with the matching `ScrapeFormat::content_type`."
@@ -142,7 +226,9 @@ pub fn collect(settings: &MetricsSettings) -> Result<String> {
 /// Fails when `format` cannot represent everything this process exposes.
 /// [`ScrapeFormat::Protobuf`] cannot carry the output of a registered extra
 /// producer, which is opaque text; [`allow_protobuf`] reports whether it may be
-/// asked for. [`ScrapeFormat::fallback`] never fails for this reason.
+/// asked for. The configured service version label must be valid, and telemetry
+/// must be initialized before it is used. [`ScrapeFormat::fallback`] never fails
+/// for format incompatibility.
 #[cfg(feature = "foundations-metrics-backend")]
 pub fn collect_format(format: ScrapeFormat, settings: &MetricsSettings) -> Result<Vec<u8>> {
     collect_encoded(format, settings)
@@ -180,7 +266,7 @@ fn collect_protobuf(settings: &MetricsSettings) -> Result<Vec<u8>> {
         );
     }
 
-    let families = collect_registered_metrics(settings);
+    let families = collect_registered_metrics(settings)?;
 
     Ok(foundations_metrics::encode_to_protobuf(&families))
 }
@@ -197,7 +283,7 @@ fn collect_text(settings: &MetricsSettings) -> Result<String> {
 
     #[cfg(feature = "foundations-metrics-backend")]
     {
-        let families = collect_registered_metrics(settings);
+        let families = collect_registered_metrics(settings)?;
 
         buffer.extend_from_slice(foundations_metrics::encode_to_text(&families).as_bytes());
 

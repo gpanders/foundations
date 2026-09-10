@@ -11,6 +11,13 @@ pub struct MetricsSettings {
 
     /// Whether to report optional metrics in the telemetry server.
     pub report_optional: bool,
+
+    /// Label name used to add [`crate::ServiceInfo::version`] to every registered metric.
+    ///
+    /// A metric row that already uses this name with a different value is not
+    /// collected.
+    #[cfg(feature = "foundations-metrics-backend")]
+    pub service_version_label_name: Option<String>,
 }
 
 /// Service name format.

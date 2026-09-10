@@ -52,7 +52,7 @@ fn metrics_unprefixed() {
 
     let settings = MetricsSettings {
         service_name_format: ServiceNameFormat::MetricPrefix,
-        report_optional: false,
+        ..Default::default()
     };
     let metrics = collect_text(&settings);
 
@@ -91,7 +91,7 @@ undefined_encode_error_valid 1
 
     let settings = MetricsSettings {
         service_name_format: ServiceNameFormat::MetricPrefix,
-        report_optional: false,
+        ..Default::default()
     };
     let metrics = collect_text(&settings);
     dbg!(&metrics);
